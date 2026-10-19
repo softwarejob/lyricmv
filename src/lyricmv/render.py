@@ -108,6 +108,9 @@ def build_filtergraph(n, offsets, lengths, duration, zoom=1.15, fade_in=1.5, fad
             # decode and scale the image once, then repeat it (instead of re-decoding a 4K PNG every frame)
             f"loop=loop={frames - 1}:size=1:start=0",
             "setpts=N",
+            # FFmpeg 7.x marks the rate unknown after setpts, and xfade needs a constant frame rate;
+            # the timestamps are already one per frame, so this neither drops nor duplicates frames
+            f"fps={FPS}",
             # perspective samples at sub-pixel positions; zoompan rounds to whole pixels and jitters
             "perspective=interpolation=cubic:eval=frame:"
             f"x0='W/2-{hw}':y0='H/2-{hh}':x1='W/2+{hw}':y1='H/2-{hh}':"
