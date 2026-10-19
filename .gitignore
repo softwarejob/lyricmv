@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.DS_Store
+
+# renders and working files
+*.mp4
+*.part.mp4
+lyricmv-work/

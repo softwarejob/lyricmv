@@ -1,0 +1,9 @@
+{
+  "scenes": [
+    {"from": "start", "image": "verse.png"},
+    {"from": "Chorus#1", "image": "chorus.png"},
+    {"from": "Verse 2", "image": "verse.png"},
+    {"from": "Chorus#2", "image": "chorus.png"},
+    {"from": "Outro", "image": "outro.png"}
+  ]
+}
