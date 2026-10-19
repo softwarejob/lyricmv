@@ -193,12 +193,15 @@ def add_subs_options(p):
 
 def add_render_options(p):
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--image", type=Path, help="one background image for the whole song (any aspect ratio)")
-    src.add_argument("--scenes", type=Path, help="scene plan JSON: which image starts at which lyric section")
-    p.add_argument("--images-dir", type=Path, help="where --scenes images live (default: next to the JSON)")
+    src.add_argument("--image", type=Path,
+                     help="one background image or video clip for the whole song (any aspect ratio; a short clip "
+                          "loops)")
+    src.add_argument("--scenes", type=Path, help="scene plan JSON: which image or clip starts at which lyric section")
+    p.add_argument("--images-dir", type=Path, help="where --scenes images and clips live (default: next to the JSON)")
     p.add_argument("--fonts-dir", type=Path, help="extra font folder for subtitles (default: bundled fonts)")
     p.add_argument("--out", type=Path, help="output .mp4 (default: <song name>.mp4 in the current folder)")
-    p.add_argument("--zoom", type=float, default=1.15, help="Ken Burns zoom per scene, 1.0 = still (default: 1.15)")
+    p.add_argument("--zoom", type=float, default=1.15,
+                   help="Ken Burns zoom per image scene, 1.0 = still; clips are not zoomed (default: 1.15)")
     p.add_argument("--transition", default="fade", help="xfade transition: fade, dissolve, smoothleft… (default: fade)")
     p.add_argument("--transition-duration", type=float, default=1.0, help="seconds (default: 1)")
     p.add_argument("--fade-in", type=float, default=1.5, help="seconds (default: 1.5)")
@@ -250,7 +253,7 @@ def build_parser():
     add_subs_options(p)
     p.set_defaults(func=cmd_subs)
 
-    p = sub.add_parser("render", help="images + song (+ subtitles) → mp4")
+    p = sub.add_parser("render", help="images or clips + song (+ subtitles) → mp4")
     p.add_argument("--audio", required=True, type=Path)
     p.add_argument("--lines", type=Path, help="lines.json from `lyricmv align` (needed with --scenes)")
     p.add_argument("--subs", type=Path, help="ASS subtitles to burn in (from `lyricmv subs`)")

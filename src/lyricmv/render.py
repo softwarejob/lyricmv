@@ -1,7 +1,8 @@
-"""Images + song (+ subtitles) → 1080p music video, in a single FFmpeg encode.
+"""Images or video clips + song (+ subtitles) → 1080p music video, in a single FFmpeg encode.
 
-Per scene: fill 16:9 → slow Ken Burns push (sub-pixel `perspective`, no jitter) → cross-fade into the
-next scene right before its section starts. Then film grain, burned-in subtitles and fades.
+Per scene: fill 16:9 → slow Ken Burns push for images (sub-pixel `perspective`, no jitter), or the clip
+itself, looped to the scene's length → cross-fade into the next scene right before its section starts.
+Then film grain, burned-in subtitles and fades.
 """
 from __future__ import annotations
 
@@ -18,26 +19,44 @@ W, H, FPS = 1920, 1080, 30
 # Film grain strength (FFmpeg `noise`, luma only): luma standard deviation ≈ 0.55 × grain
 GRAIN = 6
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+# e.g. a few seconds of motion from an image-to-video model
+VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv")
+
+
+def is_video(path):
+    return Path(path).suffix.lower() in VIDEO_EXTS
 
 
 @dataclass(frozen=True)
 class Scene:
-    image: Path
+    image: Path  # a still image or a video clip
     start: float  # when its section's first line is sung (0 for the first scene)
+
+    @property
+    def is_video(self):
+        return is_video(self.image)
 
 
 def resolve_image(ref, base):
-    """`ref` is a file path (relative to `base`), or a bare name matched against `base/<name>.*`."""
+    """`ref` is a file path (relative to `base`), or a bare name matched against `base/<name>.*`.
+
+    Images and video clips both count, so a bare name that matches more than one file (say `chorus.png`
+    and the `chorus.mp4` animated from it) has to be written with its extension.
+    """
     path = Path(ref)
     if not path.is_absolute():
         path = Path(base) / path
     if path.is_file():
         return path
     if not path.suffix:
-        found = sorted(p for p in path.parent.glob(path.name + ".*") if p.suffix.lower() in IMAGE_EXTS)
+        found = sorted(p for p in path.parent.glob(path.name + ".*")
+                       if p.suffix.lower() in IMAGE_EXTS + VIDEO_EXTS)
+        if len(found) > 1:
+            raise ValueError(f"{ref!r} matches {', '.join(p.name for p in found)}: add the extension of the one "
+                             "you want")
         if found:
             return found[0]
-    raise FileNotFoundError(f"image not found: {ref} (looked in {base})")
+    raise FileNotFoundError(f"image or clip not found: {ref} (looked in {base})")
 
 
 def load_scenes(scenes_file, lines, images_dir=None):
@@ -90,11 +109,30 @@ def work_size(zoom):
 
 
 def build_filtergraph(n, offsets, lengths, duration, zoom=1.15, fade_in=1.5, fade_out=2.0, transition="fade",
-                      tdur=1.0, subs=None, fontsdir=None, grain=GRAIN):
+                      tdur=1.0, subs=None, fontsdir=None, grain=GRAIN, videos=()):
+    """`videos[i]` is true when scene i is a video clip (its input looped with `-stream_loop -1`)."""
     ww, wh = work_size(zoom)
     parts = []
     for i, length in enumerate(lengths):
         frames = round(length * FPS)
+        if i < len(videos) and videos[i]:
+            parts.append(",".join([
+                # V = the real picture, not cover art
+                f"[{i}:V:0]setpts=PTS-STARTPTS",
+                # constant 30 fps, after setpts so the link keeps a known 30/1 rate: the same frame rate and
+                # time base (1/30) as the image scenes, as xfade requires
+                f"fps={FPS}",
+                # cut the endlessly looped clip to the scene's length; the clip moves on its own, so no Ken Burns
+                f"trim=end_frame={frames}",
+                # YUV → YUV: swscale reads the clip's colour tags (untagged = BT.601, FFmpeg's own default
+                # when it encodes RGB frames) and converts to BT.709, like the images
+                f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos"
+                ":out_color_matrix=bt709:out_range=tv",
+                f"crop={W}:{H}",
+                "setsar=1",
+                f"format=yuv420p[s{i}]",
+            ]))
+            continue
         span = f"{zoom - 1:.6f}*in/{max(frames - 1, 1)}"
         # odd scenes pull out, even scenes push in, so the camera changes direction at each cut
         z = f"({zoom:.6f}-{span})" if i % 2 else f"(1+{span})"
@@ -165,15 +203,20 @@ def render(audio, scenes, out, subs=None, fontsdir=None, zoom=1.15, transition="
 
     duration = fx.probe_duration(ff, audio)
     offsets, lengths = timeline(scenes, duration, tdur)
+    clips = {s.image: fx.probe_clip(ff, s.image) for s in scenes if s.is_video}
     venc = fx.pick_video_encoder(ff, encoder, bitrate, crf)
     aenc = fx.audio_encoder(ff)
 
     inputs = []
     for scene in scenes:
-        # -framerate makes the image's time base 1/30, so setpts=N is exactly one frame per tick
-        inputs += ["-framerate", str(FPS), "-i", str(scene.image)]
+        if scene.is_video:
+            # loop a clip that is shorter than its scene; its own sound is never used
+            inputs += ["-an", "-stream_loop", "-1", "-i", str(scene.image)]
+        else:
+            # -framerate makes the image's time base 1/30, so setpts=N is exactly one frame per tick
+            inputs += ["-framerate", str(FPS), "-i", str(scene.image)]
     graph = build_filtergraph(len(scenes), offsets, lengths, duration, zoom, fade_in, fade_out, transition, tdur,
-                              subs, fontsdir, grain)
+                              subs, fontsdir, grain, [s.is_video for s in scenes])
     cmd = [ff.ffmpeg, "-hide_banner", "-loglevel", "error", "-stats", "-y", *inputs, "-i", str(audio),
            "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-t", f"{duration:.3f}",
            "-c:v", venc.name, *venc.args, *fx.COLOR_ARGS, "-c:a", aenc, "-b:a", "320k",
@@ -182,9 +225,16 @@ def render(audio, scenes, out, subs=None, fontsdir=None, zoom=1.15, transition="
     log(f"Rendering {Path(audio).name} ({duration:.1f}s), {len(scenes)} scene(s), "
         f"encoder {venc.name}{' (hardware)' if venc.hardware else ''}"
         + (", subtitles" if subs else "") + (f", grain {grain}" if grain else ""))
-    for i, (scene, o) in enumerate(zip(scenes, offsets)):
+    for i, (scene, o, length) in enumerate(zip(scenes, offsets, lengths)):
         when = "start" if i == 0 else f"{int(scene.start // 60)}:{scene.start % 60:05.2f} (transition at {o:.2f}s)"
-        log(f"  {when:<34} {scene.image.name} ({'pull out' if i % 2 else 'push in'})")
+        if scene.is_video:
+            clip_len, clip_fps = clips[scene.image]
+            how = "clip" + (f" {clip_len:.1f}s" if clip_len else "") + (f" {clip_fps:g} fps" if clip_fps else "")
+            if clip_len and clip_len < length - 0.05:
+                how += f", looped to {length:.1f}s"
+        else:
+            how = "pull out" if i % 2 else "push in"
+        log(f"  {when:<34} {scene.image.name} ({how})")
     t0 = time.monotonic()
     try:
         res = subprocess.run(cmd)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import os
 import shutil
 import subprocess
@@ -203,6 +204,25 @@ def probe_video(ff, path):
                    "stream=codec_name,width,height", "-of", "default=nw=1:nk=1", str(path)])
     codec, width, height = out.split()[:3]
     return codec, int(width), int(height)
+
+
+def probe_clip(ff, path):
+    """(duration, fps) of a video clip, either None when the file doesn't say; raises if it has no picture."""
+    out = _output([ff.ffprobe, "-v", "error", "-select_streams", "V:0", "-show_entries",
+                   "stream=avg_frame_rate:format=duration", "-of", "json", str(path)])
+    info = json.loads(out)
+    if not info.get("streams"):
+        raise FFmpegError(f"{path} has no video stream")
+    try:
+        duration = float(info.get("format", {}).get("duration"))
+    except (TypeError, ValueError):
+        duration = None
+    try:
+        num, den = info["streams"][0]["avg_frame_rate"].split("/")
+        fps = float(num) / float(den)
+    except (KeyError, ValueError, ZeroDivisionError):
+        fps = None
+    return duration, fps
 
 
 def count_frames(ff, path):

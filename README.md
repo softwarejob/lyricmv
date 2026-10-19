@@ -9,7 +9,7 @@ are burned in — all in a single FFmpeg pass. Runs on macOS, Windows, Linux and
 ```
 song.wav ─────────────────────────────────────────────┐
 vocals.wav ──► Whisper ──► align to lyrics.txt ──► subtitles (ASS + SRT)
-images ──────────────────────────────────────────────►├──► FFmpeg, one pass ──► song.mp4
+images / clips ──────────────────────────────────────►├──► FFmpeg, one pass ──► song.mp4
 scenes.json (which image starts at which section) ────┘     Ken Burns · cross-fades · film grain · subtitles · fades
 ```
 
@@ -18,6 +18,9 @@ scenes.json (which image starts at which section) ────┘     Ken Burns 
   hallucinated credits never reach the screen. Lines Whisper missed are estimated and flagged for you.
 - **Scene changes on the music**: tag your lyrics with `[Verse]`, `[Chorus]`, `[Bridge]`… and choose an
   image per section. Each transition starts one second before the section's first word.
+- **Images or video clips**: a scene can also be a few seconds of motion from an AI video model (e.g.
+  [WanGP](https://github.com/deepbeepmeep/Wan2GP) image-to-video). lyricmv loops it to fill the section
+  and still takes care of the timing, transitions, grain and subtitles.
 - **Smooth camera**: sub-pixel `perspective` sampling instead of `zoompan`, which rounds to whole pixels
   and visibly jitters on slow zooms.
 - **Fast**: each image is decoded once; hardware H.264 (VideoToolbox, NVENC, Quick Sync, AMF) is used
@@ -65,7 +68,7 @@ You need:
    use a separator such as [Demucs](https://github.com/facebookresearch/demucs) or UVR. Without it
    lyricmv aligns against the full mix, which is less accurate.
 3. **lyrics.txt** with section tags (see below)
-4. **One image**, or several images plus a **scenes.json**
+4. **One image** (or video clip), or several plus a **scenes.json**
 
 ```bash
 # one image for the whole song
@@ -125,6 +128,26 @@ to fill 16:9 and centre-cropped. For crisp results use at least 2208×1242 (1920
 the zoom). [`examples/song`](examples/song) has a sample lyrics.txt and scenes.json (bring your own song
 and images).
 
+#### Video clips
+
+A scene can also be a video clip (`.mp4`, `.mov`, `.webm`, `.mkv`), such as a 5–10 second shot that an AI
+video model animated from one of your images ([WanGP](https://github.com/deepbeepmeep/Wan2GP) with Wan 2.2
+image-to-video, for example). Use it like an image:
+
+```json
+{"from": "Chorus#1", "image": "chorus.mp4"}
+```
+
+- The clip starts with its section and cross-fades like an image, with the same grain and subtitles on top.
+- A clip shorter than its scene loops; a longer one is cut. Clips whose last frame is close to their first
+  loop most smoothly.
+- Clips are not zoomed (they already move), and their own sound is ignored.
+- Any size, aspect ratio and frame rate: clips are scaled to fill 1920×1080 and converted to 30 fps. A
+  16 fps clip has to repeat frames and looks a little steppy, so interpolate it to 30 fps first if your
+  tool can.
+- `--image clip.mp4` puts one clip under the whole song.
+- If `chorus.png` and `chorus.mp4` are both there, write the extension: a bare `chorus` is ambiguous.
+
 ### Step by step
 
 `make` runs three commands you can also run on their own:
@@ -139,7 +162,7 @@ lyricmv render --audio song.wav --scenes scenes.json --lines work/lines.json --s
 
 | Option | Default | |
 |---|---|---|
-| `--zoom` | 1.15 | Ken Burns zoom per scene; 1.0 = still. Odd scenes push in, even scenes pull out |
+| `--zoom` | 1.15 | Ken Burns zoom per image scene; 1.0 = still. Odd scenes push in, even scenes pull out; clips are not zoomed |
 | `--transition` | fade | any [xfade](https://ffmpeg.org/ffmpeg-filters.html#xfade) transition: `dissolve`, `smoothleft`, `circleopen`… |
 | `--transition-duration` | 1 | seconds |
 | `--grain` | 6 | film grain, 0–30 (0 = off) |
@@ -178,7 +201,10 @@ model between runs. On Linux add `--user "$(id -u):$(id -g)"` so the video isn't
   (2208×1242 at 1.15×), looped, moved with `perspective` (cubic, evaluated per frame), scaled to
   1920×1080 and joined with `xfade`. Grain is added after that, on the final pixels (so it doesn't
   grow with the zoom or double up in cross-fades), luma only. Subtitles and fades come last.
+  A video clip is read with `-stream_loop -1`, converted to a constant 30 fps, trimmed to its scene's
+  frame count and scaled to fill 1920×1080, so it joins the cross-fades like an image.
 - **Colour**: RGB → YUV uses BT.709 and the frames are tagged BT.709, so colours match on YouTube.
+  Clips are converted from their own colour tags (untagged clips are read as BT.601, FFmpeg's default).
 
 ## Development
 
@@ -196,4 +222,4 @@ lyricmv is MIT licensed. The bundled fonts are under the SIL Open Font License 1
 see `src/lyricmv/fonts/licenses/`. lyricmv calls FFmpeg but does not include it; the Docker image installs
 Debian's FFmpeg package. Whisper models are downloaded from Hugging Face under their own licences (MIT).
 
-Make sure you have the rights to the music and images you publish.
+Make sure you have the rights to the music, images and clips you publish.
